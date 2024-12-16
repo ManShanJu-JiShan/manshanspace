@@ -1,0 +1,67 @@
+.
+├── 1
+├── README.md
+├── backend
+│   ├── api
+│   │   └── index.php
+│   ├── config
+│   │   ├── database.php
+│   │   ├── jwt.php
+│   │   └── mail.php
+│   ├── controllers
+│   │   ├── BaseController.php
+│   │   ├── EmailController.php
+│   │   ├── TestController.php
+│   │   ├── UserController.php
+│   │   └── VerificationController.php
+│   ├── core
+│   │   ├── BaseController.php
+│   │   ├── Database.php
+│   │   ├── Mailer.php
+│   │   ├── Router.php
+│   │   └── VerificationCode.php
+│   ├── middleware
+│   │   └── AuthMiddleware.php
+│   └── models
+│       ├── BaseModel.php
+│       ├── PasswordResetCode.php
+│       ├── RegisterVerificationCode.php
+│       └── UserModel.php
+├── composer.json
+├── composer.lock
+├── frontend
+│   ├── css
+│   │   └── style.css
+│   ├── images
+│   ├── index.html
+│   ├── js
+│   │   └── main.js
+│   └── views
+│       └── home.html
+├── project_structure.txt
+├── public
+│   ├── index.php
+│   └── uploads
+│       ├── 675ed9cd259f4.jpg
+│       ├── 675eee2ea556f.jpg
+│       └── 675ef1ab14a6f.jpg
+└── vendor
+    ├── autoload.php
+    ├── composer
+    │   ├── ClassLoader.php
+    │   ├── InstalledVersions.php
+    │   ├── LICENSE
+    │   ├── autoload_classmap.php
+    │   ├── autoload_namespaces.php
+    │   ├── autoload_psr4.php
+    │   ├── autoload_real.php
+    │   ├── autoload_static.php
+    │   ├── installed.json
+    │   ├── installed.php
+    │   └── platform_check.php
+    ├── firebase
+    │   └── php-jwt
+    └── phpmailer
+        └── phpmailer
+
+21 directories, 44 files

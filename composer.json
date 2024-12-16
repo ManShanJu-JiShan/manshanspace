@@ -1,0 +1,26 @@
+{
+    "name": "manshan/space",
+    "description": "ManShan Space Project",
+    "type": "project",
+    "authors": [
+        {
+            "name": "ManShan",
+            "email": "admin@manshan.com"
+        }
+    ],
+    "require": {
+        "firebase/php-jwt": "^6.10",
+        "phpmailer/phpmailer": "^6.9"
+    },
+    "autoload": {
+        "psr-4": {
+            "Core\\": "backend/core/",
+            "Controllers\\": "backend/controllers/",
+            "Models\\": "backend/models/",
+            "Middleware\\": "backend/middleware/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

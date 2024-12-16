@@ -1,0 +1,1687 @@
+<?php
+// 数据库配置文件
+return [
+    // 远程数据库配置
+    'host' => '124.221.84.145',
+    'dbname' => 'manshan_space',
+    'username' => 'manshan_space',
+    'password' => '1d9b405f43fbcf66',  // 远程数据库密码
+
+    // 本地数据库配置
+    // 'host' => 'localhost',
+    // 'dbname' => 'manshan_space',
+    // 'username' => 'root',
+    // 'password' => 'root',  // MAMP默认密码
+
+    'charset' => 'utf8mb4',
+    'port' => 3306,
+    'options' => [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::MYSQL_ATTR_INIT_COMMAND => "SET time_zone = '+08:00'"
+    ]
+]; <?php
+return [
+    // JWT 密钥，用于签名令牌（在实际项目中应该使用更复杂的密钥）
+    'secret_key' => 'your-secret-key-manshan-space',
+    
+    // 访问令牌过期时间（改为 2 分钟）
+    'expire_time' => 12000,
+    
+    // 令牌签发者
+    'issuer' => 'ManShanSpace',
+    
+    // 令牌接收者
+    'audience' => 'ManShanSpaceUsers',
+    
+    // 允许提前刷新的时间（30秒）
+    'refresh_ttl' => 30
+]; <?php
+return [
+    'host' => 'smtp.163.com',
+    'username' => 'manshanspace@163.com',
+    'password' => 'KFVku663pACNjmES',  // IMAP/SMTP 授权码
+    'port' => 465,
+    'encryption' => 'ssl',
+    'from_name' => 'ManShan Space'
+];<?php
+namespace Controllers;
+
+class BaseController {
+    protected $db;
+    
+    public function __construct() {
+        $this->db = \Core\Database::getInstance()->getConnection();
+    }
+    
+    protected function json($data, $code = 200) {
+        header('Content-Type: application/json');
+        http_response_code($code);
+        echo json_encode([
+            'code' => $code,
+            'data' => $data
+        ]);
+        exit;
+    }
+    
+    protected function error($message, $code = 400) {
+        header('Content-Type: application/json');
+        http_response_code($code);
+        echo json_encode([
+            'code' => $code,
+            'error' => $message
+        ]);
+        exit;
+    }
+}<?php
+namespace Controllers;
+
+use Core\BaseController;
+use Core\Mailer;
+
+class EmailController extends BaseController {
+    private $mailer;
+    
+    public function __construct() {
+        $this->mailer = new Mailer();
+    }
+    
+    public function send() {
+        try {
+            // 添加调试信息
+            error_log("开始处理邮件发送请求");
+            
+            $data = json_decode(file_get_contents('php://input'), true);
+            error_log("接收到的数据: " . print_r($data, true));
+            
+            if (!isset($data['email']) || !filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+                error_log("邮箱地址无效: " . ($data['email'] ?? 'undefined'));
+                return $this->error('请提供有效的邮箱地址');
+            }
+            
+            $to = $data['email'];
+            $subject = 'ManShan Space 测试邮件';
+            $body = '<h1>欢迎来到 ManShan Space</h1><p>这是一封测试邮件。</p>';
+            
+            error_log("准备发送邮件到: " . $to);
+            $this->mailer->send($to, $subject, $body);
+            
+            error_log("邮件发送成功");
+            return $this->json([
+                'message' => '邮件发送成功'
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("邮件发送失败: " . $e->getMessage());
+            return $this->error($e->getMessage());
+        }
+    }
+}<?php
+namespace Controllers;
+
+class TestController extends BaseController {
+    public function index() {
+        $this->json([
+            'message' => '接口测试成功',
+            'time' => date('Y-m-d H:i:s')
+        ]);
+    }
+} <?php
+namespace Controllers;
+
+use Core\BaseController;
+use Core\Database;
+use Models\UserModel;
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+use Models\User;
+
+class UserController extends BaseController 
+{
+    private $userModel;
+    
+    public function __construct() {
+        $this->userModel = new UserModel();
+    }
+
+    /**
+     * 返回 JSON 响应
+     * @param mixed $data 响应数据
+     * @param int $statusCode HTTP状态码
+     * @return bool
+     */
+    protected function json($data, $statusCode = 200) {
+        return parent::json($data, $statusCode);
+    }
+    
+    public function error($message, $code = 400) {
+        header('Content-Type: application/json');
+        echo json_encode([
+            'code' => $code,
+            'error' => $message
+        ]);
+    }
+    
+    public function create() {
+        try {
+            $data = json_decode(file_get_contents('php://input'), true);
+            
+            // 简单的验证
+            if (empty($data['email']) || empty($data['password']) || empty($data['nickname'])) {
+                return $this->error('邮箱、密码和昵称不能为空');
+            }
+            
+            // 检查邮箱是否已存在
+            if ($this->userModel->getUserByEmail($data['email'])) {
+                return $this->error('邮箱已被注册');
+            }
+            
+            // 创建用户
+            $this->userModel->createUser($data);
+            
+            return $this->json(['message' => '用户创建成功']);
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    public function list() {
+        try {
+            $users = $this->userModel->findAll();
+            return $this->json($users);
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    public function login() {
+        try {
+            $data = json_decode(file_get_contents('php://input'), true);
+            
+            // 验证必填字段
+            if (empty($data['email']) || empty($data['password'])) {
+                return $this->error('邮箱和密码不能为空');
+            }
+            
+            // 查找用户
+            $user = $this->userModel->getUserByEmail($data['email']);
+            if (!$user) {
+                return $this->error('用户不存在');
+            }
+            
+            // 验证密码
+            if (!password_verify($data['password'], $user['password'])) {
+                return $this->error('密码错误');
+            }
+            
+            // 生成 JWT token
+            $config = require __DIR__ . '/../config/jwt.php';
+            $time = time();
+            $token = JWT::encode([
+                'iss' => $config['issuer'],      // 签发者
+                'aud' => $config['audience'],    // 接收者
+                'iat' => $time,                  // 签发时间
+                'exp' => $time + $config['expire_time'],  // 过期时间
+                'uid' => $user['id'],            // 用户ID
+                'email' => $user['email']        // 用户邮箱
+            ], $config['secret_key'], 'HS256');
+            
+            // 移除密码后返回用户信息
+            unset($user['password']);
+            
+            return $this->json([
+                'message' => '登录成功',
+                'token' => $token,
+                'user' => $user
+            ]);
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    /**
+     * 获取用户信息
+     * @param array $params 路由参数
+     * @return void
+     */
+    public function getInfo($params) {
+        try {
+            // 验证用户ID
+            $userId = $params['id'];
+            if (!$userId) {
+                return $this->error('用户ID不能为空');
+            }
+            
+            // 获取当前登录用户信息
+            $currentUser = $this->getCurrentUser();
+            error_log("Current User in getInfo: " . print_r($currentUser, true));
+            
+            if (!$currentUser) {
+                return $this->error('未登录或token无效', 401);
+            }
+            
+            // 验证是否访问自己的信息
+            if ($currentUser['id'] != $userId) {
+                error_log("Access denied: current user {$currentUser['id']} trying to access user {$userId}");
+                return $this->error('没有权限访问其他用户的息', 403);
+            }
+            
+            // 查找用户
+            $user = $this->userModel->findById($userId);
+            if (!$user) {
+                return $this->error('用户不存在', 404);
+            }
+            
+            // 移除敏感信息
+            unset($user['password']);
+            
+            return $this->json([
+                'user' => $user
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("Error in getInfo: " . $e->getMessage());
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    /**
+     * 更新用户
+     * @param int $id 用户ID
+     * @return void
+     */
+    public function update($id = null) {
+        try {
+            // 验证用户ID是否存在
+            if (!$id) {
+                return $this->error('用户ID不能为空');
+            }
+            
+            // 获取请求数据
+            $data = json_decode(file_get_contents('php://input'), true);
+            
+            // 验证数据是否为空
+            if (empty($data)) {
+                return $this->error('更新数据不能为空');
+            }
+            
+            // 检查是否包含不允许更新的字段
+            $allowedFields = ['nickname', 'bio', 'avatar'];
+            $invalidFields = array_diff(array_keys($data), $allowedFields);
+            if (!empty($invalidFields)) {
+                return $this->error('包含不允许更新的字段: ' . implode(', ', $invalidFields));
+            }
+            
+            // 验证用户是否存在
+            $user = $this->userModel->findById($id);
+            if (!$user) {
+                return $this->error('用户不存在', 404);
+            }
+            
+            // 验证昵称
+            if (isset($data['nickname'])) {
+                if (mb_strlen($data['nickname'], 'UTF-8') < 2) {
+                    return $this->error('昵称长度不能少于2个字');
+                }
+                if (mb_strlen($data['nickname'], 'UTF-8') > 50) {
+                    return $this->error('昵称长度不能超过50个字符');
+                }
+            }
+            
+            // 验证简介
+            if (isset($data['bio'])) {
+                if (mb_strlen($data['bio'], 'UTF-8') > 500) {
+                    return $this->error('简介长度不能超过500个字符');
+                }
+            }
+            
+            // 执行更新
+            $result = $this->userModel->updateUser($id, $data);
+            
+            if ($result) {
+                // 获取更新后的用户信息
+                $updatedUser = $this->userModel->findById($id);
+                unset($updatedUser['password']); // 移除敏感信息
+                
+                return $this->json([
+                    'message' => '用户信息更新成功',
+                    'user' => $updatedUser
+                ]);
+            } else {
+                return $this->error('更新失败，请检查提交的数据');
+            }
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    /**
+     * 更新用户密码
+     * @param int $id 用户ID
+     * @return void
+     */
+    public function updatePassword($id = null) {
+        try {
+            // 验证用户ID
+            if (!$id) {
+                return $this->error('用户ID不能为空');
+            }
+            
+            // 获取请求数据
+            $data = json_decode(file_get_contents('php://input'), true);
+            
+            // 验证必填字段
+            if (empty($data['old_password']) || empty($data['new_password'])) {
+                return $this->error('旧密码和新密码不能为空');
+            }
+            
+            // 验证用户是否存在
+            $user = $this->userModel->findById($id);
+            if (!$user) {
+                return $this->error('用户不存在', 404);
+            }
+            
+            // 验证旧密码是否正确
+            if (!$this->userModel->verifyPassword($id, $data['old_password'])) {
+                return $this->error('旧密码不正确');
+            }
+            
+            // 验证新密码格式
+            if (strlen($data['new_password']) < 6) {
+                return $this->error('新密码长度不能少于6个字符');
+            }
+            
+            if (strlen($data['new_password']) > 20) {
+                return $this->error('新密码长度不能超过20个字符');
+            }
+            
+            // 验证新旧密码是否相同
+            if ($data['old_password'] === $data['new_password']) {
+                return $this->error('新密码不能与旧密码相同');
+            }
+            
+            // 更新密码
+            $result = $this->userModel->updatePassword($id, $data['new_password']);
+            
+            if ($result) {
+                return $this->json([
+                    'message' => '密码更新成功'
+                ]);
+            } else {
+                return $this->error('密码更新失败');
+            }
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    /**
+     * 上传用户头像
+     * @param array $params 路由参数
+     * @return void
+     */
+    public function uploadAvatar($params) {
+        try {
+            $userId = $params['id'];
+            
+            // 验证权限
+            $currentUser = $this->getCurrentUser();
+            if (!$currentUser || $currentUser['id'] != $userId) {
+                return $this->error('没有权限更新其他用户的头像', 403);
+            }
+            
+            // 验证文件上传
+            if (!isset($_FILES['avatar'])) {
+                return $this->error('没有上传文件');
+            }
+            
+            $file = $_FILES['avatar'];
+            if ($file['error'] !== UPLOAD_ERR_OK) {
+                return $this->error('文件上传失败');
+            }
+            
+            // 验证文件类型
+            $allowedTypes = ['image/jpeg', 'image/png', 'image/gif'];
+            if (!in_array($file['type'], $allowedTypes)) {
+                return $this->error('只允许上传 JPG、PNG 或 GIF 格式的图片');
+            }
+            
+            // 验证文件大小（最大 2MB）
+            if ($file['size'] > 2 * 1024 * 1024) {
+                return $this->error('文件大小不能超过 2MB');
+            }
+            
+            // 生成唯一文件名
+            $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
+            $filename = uniqid() . '.' . $extension;
+            
+            // 确保上传目录存在
+            $uploadDir = __DIR__ . '/../../public/uploads/';
+            if (!file_exists($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+            
+            // 移动文件到目标位置
+            $targetPath = $uploadDir . $filename;
+            if (!move_uploaded_file($file['tmp_name'], $targetPath)) {
+                return $this->error('文件保存失败');
+            }
+            
+            // 更新数据库中的头像路径
+            $avatarPath = '/uploads/' . $filename;
+            $success = $this->userModel->updateAvatar($userId, $avatarPath);
+            
+            if (!$success) {
+                // 如果数据库更新失败，删除已上传的文件
+                unlink($targetPath);
+                return $this->error('更新头像信息失败');
+            }
+            
+            // 获取更新后的用户信息
+            $user = $this->userModel->findById($userId);
+            unset($user['password']);
+            
+            return $this->json([
+                'message' => '头像上传成功',
+                'user' => $user
+            ]);
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+    
+    public function refreshToken() {
+        try {
+            // 获取当前用户信息
+            $currentUser = parent::getCurrentUser();
+            if (!$currentUser) {
+                return $this->error('未登录或token无效', 401);
+            }
+            
+            // 获取用户完整信息
+            $user = $this->userModel->findById($currentUser['id']);
+            if (!$user) {
+                return $this->error('用户不存在', 404);
+            }
+            
+            // 生成新的 token
+            $config = require __DIR__ . '/../config/jwt.php';
+            $time = time();
+            $token = JWT::encode([
+                'iss' => $config['issuer'],      // 签发者
+                'aud' => $config['audience'],    // 接收者
+                'iat' => $time,                  // 签发时间
+                'exp' => $time + $config['expire_time'],  // 过期时间
+                'uid' => $user['id'],            // 用户ID
+                'email' => $user['email']        // 用户邮箱
+            ], $config['secret_key'], 'HS256');
+            
+            // 移除敏感信息
+            unset($user['password']);
+            
+            return $this->json([
+                'message' => 'token刷新成功',
+                'token' => $token,
+                'user' => $user
+            ]);
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+
+    /**
+     * 用户注册
+     */
+    public function register() {
+        try {
+            $data = $this->getRequestJson();
+            
+            // 验证必填字段
+            if (!isset($data['email']) || !isset($data['password']) || !isset($data['code'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '缺少必要参数'
+                ]);
+            }
+            
+            // 验证邮箱格式
+            if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '邮箱格式不正确'
+                ]);
+            }
+            
+            // 验证密码长度
+            if (strlen($data['password']) < 6) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '密码长度不能小于6位'
+                ]);
+            }
+            
+            // 验证验证码
+            $verifyCode = new \Models\RegisterVerificationCode();
+            $verifyResult = $verifyCode->verify($data['email'], $data['code']);
+            
+            if (isset($verifyResult['error'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => $verifyResult['error']
+                ]);
+            }
+            
+            // 检查邮箱是否已注册
+            if ($this->userModel->getUserByEmail($data['email'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '该邮箱已注册'
+                ]);
+            }
+            
+            // 创建用户
+            $result = $this->userModel->create([
+                'email' => $data['email'],
+                'password' => password_hash($data['password'], PASSWORD_DEFAULT),
+                'nickname' => $data['email'],  // 默认使用邮箱作为昵称
+                'created_at' => date('Y-m-d H:i:s'),
+                'updated_at' => date('Y-m-d H:i:s')
+            ]);
+            
+            if ($result) {
+                return $this->json([
+                    'code' => 200,
+                    'data' => [
+                        'message' => '注册成功'
+                    ]
+                ]);
+            }
+            
+            return $this->json([
+                'code' => 500,
+                'message' => '注册失败'
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("用户注册失败：" . $e->getMessage());
+            return $this->json([
+                'code' => 500,
+                'message' => '注册失败'
+            ]);
+        }
+    }
+
+    public function updateProfile($params) {
+        try {
+            $userId = $params['id'];
+            
+            // 验证权限
+            $currentUser = $this->getCurrentUser();
+            if (!$currentUser || $currentUser['id'] != $userId) {
+                return $this->error('没有权限更新其他户的信息', 403);
+            }
+            
+            // 获取请求数据
+            $data = json_decode(file_get_contents('php://input'), true);
+            if (!$data) {
+                return $this->error('无效的请数据');
+            }
+            
+            // 验证数据
+            if (isset($data['nickname']) && strlen($data['nickname']) > 50) {
+                return $this->error('昵称长度不能超过50个字符');
+            }
+            
+            if (isset($data['bio']) && strlen($data['bio']) > 200) {
+                return $this->error('简介长度不能超过200个字符');
+            }
+            
+            // 更新用户信息
+            $success = $this->userModel->update($userId, [
+                'nickname' => $data['nickname'] ?? null,
+                'bio' => $data['bio'] ?? null
+            ]);
+            
+            if (!$success) {
+                return $this->error('更新失败');
+            }
+            
+            // 获取更新后的用户信息
+            $user = $this->userModel->findById($userId);
+            unset($user['password']); // 移除敏感信息
+            
+            return $this->json([
+                'message' => '更新成功',
+                'user' => $user
+            ]);
+            
+        } catch (\Exception $e) {
+            return $this->error($e->getMessage());
+        }
+    }
+
+    /**
+     * 已登录用户修改密码
+     */
+    public function changePassword() {
+        try {
+            $data = $this->getRequestJson();
+            
+            // 验证必填字段
+            if (!isset($data['old_password']) || !isset($data['new_password'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '缺少必要参数'
+                ]);
+            }
+            
+            // 验证新密码长度
+            if (strlen($data['new_password']) < 6) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '新密码长度不能小于6位'
+                ]);
+            }
+            
+            // 获取当前用户ID
+            $currentUser = $this->getCurrentUser();
+            if (!$currentUser) {
+                return $this->json([
+                    'code' => 401,
+                    'message' => '未登录或token无效'
+                ]);
+            }
+            
+            // 验证旧密码
+            if (!$this->userModel->verifyPassword($currentUser['id'], $data['old_password'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '原密码错误'
+                ]);
+            }
+            
+            // 更新密码
+            if ($this->userModel->updatePassword($currentUser['id'], $data['new_password'])) {
+                return $this->json([
+                    'code' => 200,
+                    'message' => '密码修改成功'
+                ]);
+            }
+            
+            return $this->json([
+                'code' => 500,
+                'message' => '密码修改失败'
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("修改密码失败：" . $e->getMessage());
+            return $this->json([
+                'code' => 500,
+                'message' => '修改密码失败'
+            ]);
+        }
+    }
+
+    /**
+     * 重置密码
+     */
+    public function resetPassword() {
+        try {
+            $data = $this->getRequestJson();
+            
+            // 验证必填字段
+            if (!isset($data['email']) || !isset($data['code']) || !isset($data['new_password'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '缺少必要参数'
+                ]);
+            }
+            
+            // 验证新密码长度
+            if (strlen($data['new_password']) < 6) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '新密码长度不能小于6位'
+                ]);
+            }
+            
+            // 验证验证码
+            $resetCode = new \Models\PasswordResetCode();  // 使用正确的模型名
+            if (!$resetCode->verify($data['email'], $data['code'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '验证码无效或已过期'
+                ]);
+            }
+            
+            // 获取用户信息
+            $user = $this->userModel->getUserByEmail($data['email']);
+            if (!$user) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '用户不存在'
+                ]);
+            }
+            
+            // 更新密码
+            if ($this->userModel->updatePassword($user['id'], $data['new_password'])) {
+                // 标记验证码为已使用
+                $resetCode->markAsUsed($data['email'], $data['code']);
+                
+                return $this->json([
+                    'code' => 200,
+                    'message' => '密码重置成功'
+                ]);
+            }
+            
+            return $this->json([
+                'code' => 500,
+                'message' => '密码重置失败'
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("重置密码失败：" . $e->getMessage());
+            return $this->json([
+                'code' => 500,
+                'message' => '重置密码失败'
+            ]);
+        }
+    }
+
+    /**
+     * 获取当前登录用户ID
+     */
+    protected function getCurrentUserId() {
+        return $_SERVER['USER_ID'] ?? null;
+    }
+} <?php
+/**
+ * 验证码控制器
+ * 
+ * 处理所有验证码相关的请求，包括：
+ * 1. 发送注册验证码
+ * 2. 发送密码重置验证码
+ * 3. 验证码状态查询
+ * 4. 错误处理和响应
+ * 
+ * @package Controllers
+ * @author ManShan Space
+ * @version 1.0
+ */
+namespace Controllers;
+
+use Core\BaseController;
+use Core\Mailer;
+use Models\RegisterVerificationCode;
+use Models\PasswordResetCode;
+
+class VerificationController extends BaseController {
+    /** @var Mailer 邮件发送实例 */
+    private $mailer;
+    
+    public function __construct() {
+        $this->mailer = new Mailer();
+    }
+    
+    /**
+     * 发送验证码
+     * 支持注册和密码重置两种类型
+     * 
+     * @return void
+     */
+    public function sendCode() {
+        try {
+            $data = json_decode(file_get_contents('php://input'), true);
+            
+            // 验证请求数据
+            if (!isset($data['email']) || !isset($data['type'])) {
+                return $this->error('邮箱地址和验证码类型不能为空');
+            }
+            
+            if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+                return $this->error('邮箱地址格式不正确');
+            }
+            
+            $email = $data['email'];
+            $type = $data['type'];
+            $ipAddress = $_SERVER['REMOTE_ADDR'];
+            $userAgent = $_SERVER['HTTP_USER_AGENT'];
+            
+            // 根据类型处理验证码
+            switch ($type) {
+                case 'register':
+                    return $this->handleRegisterCode($email, $ipAddress, $userAgent);
+                    
+                case 'reset_password':
+                    return $this->handlePasswordResetCode($email, $ipAddress, $userAgent);
+                    
+                default:
+                    return $this->error('不支持的验证码类型');
+            }
+            
+        } catch (\Exception $e) {
+            error_log("发送验证码失败：" . $e->getMessage());
+            return $this->error('发送验证码失败');
+        }
+    }
+    
+    /**
+     * 处理注册验证码
+     * 
+     * @param string $email 邮箱地址
+     * @param string $ipAddress IP地址
+     * @param string $userAgent 用户代理
+     * @return void
+     */
+    private function handleRegisterCode($email, $ipAddress, $userAgent) {
+        $model = new RegisterVerificationCode();
+        
+        // 创建验证码
+        $codeInfo = $model->create($email, $ipAddress, $userAgent);
+        
+        if (!$codeInfo || isset($codeInfo['error'])) {
+            return $this->error($codeInfo['error'] ?? '创建验证码失败');
+        }
+        
+        // 发送邮件
+        $subject = 'ManShan Space - 注册验证码';
+        $body = $this->getRegisterEmailTemplate($codeInfo['code']);
+        
+        try {
+            $this->mailer->send($email, $subject, $body);
+            $model->markAsSent($codeInfo['id']);
+            
+            return $this->json([
+                'message' => '验证码已发送到您的邮箱'
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("发送注册验证码邮件失败：" . $e->getMessage());
+            return $this->error('发送验证码失败，请稍后重试');
+        }
+    }
+    
+    /**
+     * 处理密码重置验证码
+     * 
+     * @param string $email 邮箱地址
+     * @param string $ipAddress IP地址
+     * @param string $userAgent 用户代理
+     * @return void
+     */
+    private function handlePasswordResetCode($email, $ipAddress, $userAgent) {
+        $model = new PasswordResetCode();
+        
+        // 创建验证码
+        $codeInfo = $model->create($email, $ipAddress, $userAgent);
+        
+        if (!$codeInfo || isset($codeInfo['error'])) {
+            return $this->error($codeInfo['error'] ?? '创建验证码失败');
+        }
+        
+        // 发送邮件
+        $subject = 'ManShan Space - 密码重置验证码';
+        $body = $this->getPasswordResetEmailTemplate($codeInfo['code']);
+        
+        try {
+            $this->mailer->send($email, $subject, $body);
+            $model->markAsSent($codeInfo['id']);
+            
+            return $this->json([
+                'message' => '验证码已发送到您的邮箱'
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("发送密码重置验证码邮件失败：" . $e->getMessage());
+            return $this->error('发送验证码失败，请稍后重试');
+        }
+    }
+    
+    /**
+     * 获取注册邮件模板
+     * 
+     * @param string $code 验证码
+     * @return string
+     */
+    private function getRegisterEmailTemplate($code) {
+        return "<h1>欢迎注册 ManShan Space</h1>
+                <p>您的注册验证码是：<strong>{$code}</strong></p>
+                <p>验证码有效期为10分钟，请尽快使用。</p>
+                <p>如果这不是您的操作，请忽略此邮件。</p>";
+    }
+    
+    /**
+     * 获取密码重置邮件模板
+     * 
+     * @param string $code 验证码
+     * @return string
+     */
+    private function getPasswordResetEmailTemplate($code) {
+        return "<h1>ManShan Space 密码重置</h1>
+                <p>您的密码重置验证码是：<strong>{$code}</strong></p>
+                <p>验证码有效期为10分钟，请尽快使用。</p>
+                <p>如果这不是您的操作，请立即检查账号安全。</p>";
+    }
+    
+    /**
+     * 验证验证码
+     */
+    public function checkCode() {
+        try {
+            $data = $this->getRequestJson();
+            
+            // 验证必填字段
+            if (!isset($data['email']) || !isset($data['code']) || !isset($data['type'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '缺少必要参数'
+                ]);
+            }
+            
+            // 根据类型选择验证码模型
+            $model = $this->getVerificationModel($data['type']);
+            if (!$model) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => '无效的验证类型'
+                ]);
+            }
+            
+            // 验证验证码
+            $result = $model->verify($data['email'], $data['code']);
+            
+            if (isset($result['error'])) {
+                return $this->json([
+                    'code' => 400,
+                    'message' => $result['error']
+                ]);
+            }
+            
+            return $this->json([
+                'code' => 200,
+                'data' => [
+                    'message' => '验证成功'
+                ]
+            ]);
+            
+        } catch (\Exception $e) {
+            error_log("验证码验证失败：" . $e->getMessage());
+            return $this->json([
+                'code' => 500,
+                'message' => '验证码验证失败'
+            ]);
+        }
+    }
+    
+    /**
+     * 根据类型获取验证码模型
+     */
+    private function getVerificationModel($type) {
+        switch ($type) {
+            case 'register':
+                return new RegisterVerificationCode();
+            case 'reset_password':
+                return new PasswordResetCode();
+            default:
+                return null;
+        }
+    }
+} <?php
+namespace Models;
+
+class BaseModel {
+    protected $db;
+    protected $table;
+    
+    public function __construct() {
+        $this->db = \Core\Database::getInstance()->getConnection();
+    }
+    
+    public function findAll() {
+        $stmt = $this->db->query("SELECT * FROM {$this->table}");
+        return $stmt->fetchAll();
+    }
+    
+    public function findById($id) {
+        $stmt = $this->db->prepare("SELECT * FROM {$this->table} WHERE id = :id");
+        $stmt->execute(['id' => $id]);
+        return $stmt->fetch();
+    }
+} 
+<?php
+/**
+ * 密码重置验证码模型
+ * 
+ * 该类负责处理密码重置验证码的所有数据库操作，包括：
+ * 1. 创建密码重置验证码
+ * 2. 验证码的查询和验证
+ * 3. 更新验证码状态
+ * 4. 记录重置验证码的使用情况
+ * 5. 防止重置密码的滥用
+ * 
+ * @package Models
+ * @author ManShan Space
+ * @version 1.0
+ */
+namespace Models;
+
+use Core\Database;
+use Core\VerificationCode;
+
+class PasswordResetCode {
+    /** @var Database 数据库实例 */
+    private $db;
+    
+    /** @var string 数据表名 */
+    private $table = 'password_reset_codes';
+    
+    public function __construct() {
+        $this->db = new Database();
+    }
+    
+    /**
+     * 创建密码重置验证码
+     * 
+     * @param string $email 邮箱地址
+     * @param string $ipAddress IP地址
+     * @param string $userAgent 用户代理信息
+     * @return array|bool 成功返回验证码信息，失败返回false
+     */
+    public function create($email, $ipAddress, $userAgent) {
+        try {
+            // 检查是否存在未过期的验证码
+            if ($this->hasActiveCode($email)) {
+                return ['error' => '已存在有效的验证码，请稍后再试'];
+            }
+            
+            // 生成新验证码
+            $datetime = new \DateTime('now', new \DateTimeZone('Asia/Shanghai'));
+            $datetime->modify('+10 minutes');
+            
+            $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            
+            $sql = "INSERT INTO {$this->table} 
+                    (email, code, expires_at, ip_address, user_agent) 
+                    VALUES 
+                    (:email, :code, :expires_at, :ip_address, :user_agent)";
+                    
+            $this->db->query($sql);
+            $this->db->bind(':email', $email);
+            $this->db->bind(':code', $code);
+            $this->db->bind(':expires_at', $datetime->format('Y-m-d H:i:s'));
+            $this->db->bind(':ip_address', $ipAddress);
+            $this->db->bind(':user_agent', $userAgent);
+            
+            if ($this->db->execute()) {
+                return [
+                    'id' => $this->db->lastInsertId(),
+                    'email' => $email,
+                    'code' => $code,
+                    'expires_at' => $datetime->format('Y-m-d H:i:s')
+                ];
+            }
+            
+            return false;
+            
+        } catch (\Exception $e) {
+            error_log("创建密码重置验证码失败：" . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 检查是否存在有效的验证码
+     * 
+     * @param string $email 邮箱地址
+     * @return bool 是否存在有效验证码
+     */
+    private function hasActiveCode($email) {
+        $sql = "SELECT COUNT(*) as count 
+                FROM {$this->table} 
+                WHERE email = :email 
+                AND status = 'pending' 
+                AND expires_at > CURRENT_TIMESTAMP";
+                
+        $this->db->query($sql);
+        $this->db->bind(':email', $email);
+        $result = $this->db->single();
+        
+        return $result['count'] > 0;
+    }
+    
+    /**
+     * 标记验证码为已发送
+     * 
+     * @param int $id 验证码ID
+     * @return bool 是否更新成功
+     */
+    public function markAsSent($id) {
+        $sql = "UPDATE {$this->table} 
+                SET sent_at = CURRENT_TIMESTAMP 
+                WHERE id = :id";
+                
+        $this->db->query($sql);
+        $this->db->bind(':id', $id);
+        return $this->db->execute();
+    }
+    
+    /**
+     * 验证重置密码的验证码
+     * 
+     * @param string $email 邮箱地址
+     * @param string $code 验证码
+     * @param string $ipAddress IP地址
+     * @return array|bool 验证成功返回true，失败返回错误信息
+     */
+    public function verifyCode($email, $code, $ipAddress) {
+        try {
+            // 更新过期状态
+            $this->updateExpiredCodes();
+            
+            // 查找有效的验证码
+            $sql = "SELECT * FROM {$this->table} 
+                   WHERE email = :email 
+                   AND status = 'pending'
+                   AND attempts < :max_attempts 
+                   ORDER BY created_at DESC 
+                   LIMIT 1";
+            
+            $this->db->query($sql);
+            $this->db->bind(':email', $email);
+            $this->db->bind(':max_attempts', VerificationCode::MAX_ATTEMPTS);
+            
+            $record = $this->db->single();
+            
+            if (!$record) {
+                return ['error' => '验证码不存在或已失效'];
+            }
+            
+            // 更新尝试信息
+            $this->updateAttempt($record['id'], $ipAddress);
+            
+            // 验证码比对
+            if ($record['code'] === $code) {
+                $this->markAsUsed($record['id']);
+                return true;
+            }
+            
+            return ['error' => '验证码错误'];
+            
+        } catch (\Exception $e) {
+            error_log("密码重置验证码验证失败：" . $e->getMessage());
+            return ['error' => '验证码验证失败'];
+        }
+    }
+    
+    /**
+     * 更新过期的验证码状态
+     * 
+     * @return void
+     */
+    private function updateExpiredCodes() {
+        $sql = "UPDATE {$this->table} 
+                SET status = 'expired' 
+                WHERE status = 'pending' 
+                AND expires_at < CURRENT_TIMESTAMP";
+        
+        $this->db->query($sql);
+        $this->db->execute();
+    }
+    
+    /**
+     * 更新验证尝试信息
+     * 
+     * @param int $id 验证码ID
+     * @param string $ipAddress IP地址
+     * @return void
+     */
+    private function updateAttempt($id, $ipAddress) {
+        $sql = "UPDATE {$this->table} 
+                SET attempts = attempts + 1,
+                    last_attempt_at = CURRENT_TIMESTAMP,
+                    ip_address = :ip_address
+                WHERE id = :id";
+                
+        $this->db->query($sql);
+        $this->db->bind(':id', $id);
+        $this->db->bind(':ip_address', $ipAddress);
+        $this->db->execute();
+    }
+    
+    /**
+     * 标记验证码为已使用
+     */
+    public function markAsUsed($email, $code) {
+        $this->db->query("UPDATE password_reset_codes 
+                         SET status = 'used', 
+                             used_at = NOW() 
+                         WHERE email = :email 
+                         AND code = :code 
+                         AND status = 'pending'");
+        
+        $this->db->bind(':email', $email);
+        $this->db->bind(':code', $code);
+        
+        return $this->db->execute();
+    }
+    
+    /**
+     * 验证重置密码验证码
+     */
+    public function verify($email, $code) {
+        $this->db->query("SELECT * FROM password_reset_codes 
+                         WHERE email = :email 
+                         AND code = :code 
+                         AND status = 'pending' 
+                         AND expires_at > NOW()");
+        
+        $this->db->bind(':email', $email);
+        $this->db->bind(':code', $code);
+        
+        return $this->db->single() !== false;
+    }
+} <?php
+/**
+ * 注册验证码模型
+ * 
+ * 该类负责处理注册验证码的所有数据库操作，包括：
+ * 1. 创建新的验证码记录
+ * 2. 验证码的查询和验证
+ * 3. 更新验证码状态（使用、过期等）
+ * 4. 记录验证码使用情况（发送时间、使用时间、尝试次数等）
+ * 
+ * @package Models
+ * @author ManShan Space
+ * @version 1.0
+ */
+namespace Models;
+
+use Core\Database;
+use Core\VerificationCode;
+
+class RegisterVerificationCode {
+    /** @var Database 数据库实例 */
+    private $db;
+    
+    /** @var string 数据表名 */
+    private $table = 'register_verification_codes';
+    
+    public function __construct() {
+        $this->db = new Database();
+    }
+    
+    /**
+     * 创建新的验证码记录
+     * 
+     * @param string $email 邮箱地址
+     * @param string $ipAddress IP地址
+     * @param string $userAgent 用户代理信息
+     * @return array|bool 成功返回验证码信息，失败返回false
+     */
+    public function create($email, $ipAddress, $userAgent) {
+        try {
+            // 生成验证码
+            $codeInfo = VerificationCode::generateRegisterCode($email, $ipAddress, $userAgent);
+            
+            // 插入数据库
+            $sql = "INSERT INTO {$this->table} 
+                    (email, code, expires_at, ip_address, user_agent) 
+                    VALUES 
+                    (:email, :code, :expires_at, :ip_address, :user_agent)";
+                    
+            $this->db->query($sql);
+            $this->db->bind(':email', $codeInfo['email']);
+            $this->db->bind(':code', $codeInfo['code']);
+            $this->db->bind(':expires_at', $codeInfo['expires_at']);
+            $this->db->bind(':ip_address', $codeInfo['ip_address']);
+            $this->db->bind(':user_agent', $codeInfo['user_agent']);
+            
+            if ($this->db->execute()) {
+                // 添加ID到返回信息中
+                $codeInfo['id'] = $this->db->lastInsertId();
+                return $codeInfo;
+            }
+            
+            return false;
+            
+        } catch (\Exception $e) {
+            error_log("创建验证码失败：" . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * 标记验证码为已发送
+     * 
+     * @param int $id 验证码ID
+     * @return bool 是否更新成功
+     */
+    public function markAsSent($id) {
+        $sql = "UPDATE {$this->table} 
+                SET sent_at = CURRENT_TIMESTAMP 
+                WHERE id = :id";
+                
+        $this->db->query($sql);
+        $this->db->bind(':id', $id);
+        return $this->db->execute();
+    }
+    
+    /**
+     * 验证码比对
+     * 
+     * @param string $email 邮箱地址
+     * @param string $code 验证码
+     * @param string $ipAddress IP地址
+     * @return array|bool 验证成功返回true，失败返回错误信息
+     */
+    public function verifyCode($email, $code, $ipAddress) {
+        try {
+            // 更新过期状态
+            $this->updateExpiredCodes();
+            
+            // 查找有效的验证码
+            $sql = "SELECT * FROM {$this->table} 
+                   WHERE email = :email 
+                   AND status = 'pending'
+                   AND attempts < :max_attempts 
+                   ORDER BY created_at DESC 
+                   LIMIT 1";
+            
+            $this->db->query($sql);
+            $this->db->bind(':email', $email);
+            $this->db->bind(':max_attempts', VerificationCode::MAX_ATTEMPTS);
+            
+            $record = $this->db->single();
+            
+            if (!$record) {
+                return ['error' => '验证码不存在或已失效'];
+            }
+            
+            // 更新尝试信息
+            $this->updateAttempt($record['id'], $ipAddress);
+            
+            // 验证码比对
+            if ($record['code'] === $code) {
+                $this->markAsUsed($record['id']);
+                return true;
+            }
+            
+            return ['error' => '验证码错误'];
+            
+        } catch (\Exception $e) {
+            error_log("验证码验证失败：" . $e->getMessage());
+            return ['error' => '验证码验证失败'];
+        }
+    }
+    
+    /**
+     * 更新过期的验证码状态
+     * 
+     * @return void
+     */
+    private function updateExpiredCodes() {
+        $sql = "UPDATE {$this->table} 
+                SET status = 'expired' 
+                WHERE status = 'pending' 
+                AND expires_at < CURRENT_TIMESTAMP";
+        
+        $this->db->query($sql);
+        $this->db->execute();
+    }
+    
+    /**
+     * 更新验证尝试信息
+     * 
+     * @param int $id 验证码ID
+     * @param string $ipAddress IP地址
+     * @return void
+     */
+    private function updateAttempt($id, $ipAddress) {
+        $sql = "UPDATE {$this->table} 
+                SET attempts = attempts + 1,
+                    last_attempt_at = CURRENT_TIMESTAMP,
+                    ip_address = :ip_address
+                WHERE id = :id";
+                
+        $this->db->query($sql);
+        $this->db->bind(':id', $id);
+        $this->db->bind(':ip_address', $ipAddress);
+        $this->db->execute();
+    }
+    
+    /**
+     * 标记验证码为已使用
+     * 
+     * @param int $id 验证码ID
+     * @return void
+     */
+    private function markAsUsed($id) {
+        $sql = "UPDATE {$this->table} 
+                SET status = 'used',
+                    used_at = CURRENT_TIMESTAMP 
+                WHERE id = :id";
+                
+        $this->db->query($sql);
+        $this->db->bind(':id', $id);
+        $this->db->execute();
+    }
+    
+    /**
+     * 验证注册验证码
+     */
+    public function verify($email, $code) {
+        try {
+            // 查找最新的未使用验证码
+            $sql = "SELECT * FROM {$this->table} 
+                    WHERE email = :email 
+                    AND code = :code 
+                    AND status = 'pending'
+                    AND expires_at > NOW()
+                    ORDER BY created_at DESC 
+                    LIMIT 1";
+                    
+            $this->db->query($sql);
+            $this->db->bind(':email', $email);
+            $this->db->bind(':code', $code);
+            
+            $record = $this->db->single();
+            
+            if (!$record) {
+                return ['error' => '验证码无效或已过期'];
+            }
+            
+            // 更新验证码状态
+            $sql = "UPDATE {$this->table} 
+                    SET status = 'used', 
+                        used_at = NOW() 
+                    WHERE id = :id";
+                    
+            $this->db->query($sql);
+            $this->db->bind(':id', $record['id']);
+            
+            if ($this->db->execute()) {
+                return true;
+            }
+            
+            return ['error' => '验证码验证失败'];
+            
+        } catch (\Exception $e) {
+            error_log("注册验证码验证失败：" . $e->getMessage());
+            return ['error' => '验证码验证失败'];
+        }
+    }
+} <?php
+namespace Models;
+
+use Core\Database;
+
+class UserModel {
+    private $db;
+    private $table = 'users';
+    
+    public function __construct() {
+        $this->db = new Database();
+    }
+    
+    public function create($data) {
+        $sql = "INSERT INTO {$this->table} (email, password, nickname, created_at, updated_at) 
+                VALUES (:email, :password, :nickname, :created_at, :updated_at)";
+                
+        try {
+            $this->db->query($sql);
+            $this->db->bind(':email', $data['email']);
+            $this->db->bind(':password', $data['password']);
+            $this->db->bind(':nickname', $data['nickname']);
+            $this->db->bind(':created_at', $data['created_at']);
+            $this->db->bind(':updated_at', $data['updated_at']);
+            
+            if ($this->db->execute()) {
+                return $this->db->lastInsertId();
+            }
+            return false;
+        } catch (\PDOException $e) {
+            throw new \Exception("创建用户失败: " . $e->getMessage());
+        }
+    }
+    
+    public function findById($id) {
+        $sql = "SELECT * FROM {$this->table} WHERE id = :id";
+        $this->db->query($sql);
+        $this->db->bind(':id', $id);
+        return $this->db->single();
+    }
+    
+    public function getUserByEmail($email) {
+        $sql = "SELECT * FROM {$this->table} WHERE email = :email";
+        $this->db->query($sql);
+        $this->db->bind(':email', $email);
+        return $this->db->single();
+    }
+    
+    /**
+     * 更新用户信息
+     * @param int $id 用户ID
+     * @param array $data 要更新的数据
+     * @return bool 更新是否成功
+     */
+    public function updateUser($id, $data) {
+        // 构建更新字段
+        $updateFields = [];
+        $params = [];
+        
+        // 只允许更新特定字段
+        $allowedFields = ['nickname', 'bio', 'avatar'];
+        
+        // 遍历数据，只处理允许更新的字段
+        foreach ($data as $key => $value) {
+            if (in_array($key, $allowedFields)) {
+                $updateFields[] = "{$key} = :{$key}";
+                $params[$key] = $value;
+            }
+        }
+        
+        // 如果没有可更新的字段，返回 false
+        if (empty($updateFields)) {
+            return false;
+        }
+        
+        // 添加用户ID到参数中
+        $params['id'] = $id;
+        
+        // 构建 SQL 语句
+        $sql = "UPDATE users SET " . implode(', ', $updateFields) . " WHERE id = :id";
+        
+        // 执行更新
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute($params);
+    }
+    
+    /**
+     * 更新用户密码
+     * @param int $id 用户ID
+     * @param string $newPassword 新密码
+     * @return bool 更新是否成功
+     */
+    public function updatePassword($id, $newPassword) {
+        $this->db->query("UPDATE users SET password = :password WHERE id = :id");
+        
+        $this->db->bind(':password', password_hash($newPassword, PASSWORD_DEFAULT));
+        $this->db->bind(':id', $id);
+        
+        return $this->db->execute();
+    }
+    
+    /**
+     * 验证用户密码
+     * @param int $id 用户ID
+     * @param string $password 待验证的密码
+     * @return bool 密码是否正确
+     */
+    public function verifyPassword($id, $password) {
+        $this->db->query("SELECT password FROM users WHERE id = :id");
+        $this->db->bind(':id', $id);
+        $user = $this->db->single();
+        
+        if (!$user) {
+            return false;
+        }
+        
+        return password_verify($password, $user['password']);
+    }
+    
+    public function update($id, $data) {
+        $fields = [];
+        $values = [];
+        
+        // 只更新允许的字段
+        $allowedFields = ['nickname', 'bio'];
+        foreach ($allowedFields as $field) {
+            if (isset($data[$field])) {
+                $fields[] = "{$field} = :{$field}";
+                $values[":{$field}"] = $data[$field];
+            }
+        }
+        
+        if (empty($fields)) {
+            return false;
+        }
+        
+        // 添加更新时间
+        $fields[] = "updated_at = :updated_at";
+        $values[":updated_at"] = date('Y-m-d H:i:s');
+        
+        $sql = "UPDATE {$this->table} SET " . implode(', ', $fields) . " WHERE id = :id";
+        $values[':id'] = $id;
+        
+        try {
+            $this->db->query($sql);
+            foreach ($values as $key => $value) {
+                $this->db->bind($key, $value);
+            }
+            return $this->db->execute();
+        } catch (\PDOException $e) {
+            throw new \Exception("更新用户信息失败: " . $e->getMessage());
+        }
+    }
+    
+    public function updateAvatar($userId, $avatarPath) {
+        $sql = "UPDATE {$this->table} SET avatar = :avatar, updated_at = :updated_at WHERE id = :id";
+        
+        try {
+            $this->db->query($sql);
+            $this->db->bind(':avatar', $avatarPath);
+            $this->db->bind(':updated_at', date('Y-m-d H:i:s'));
+            $this->db->bind(':id', $userId);
+            
+            return $this->db->execute();
+        } catch (\PDOException $e) {
+            throw new \Exception("更新头像失败: " . $e->getMessage());
+        }
+    }
+} 
